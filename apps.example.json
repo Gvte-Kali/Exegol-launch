@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Burp Suite (personnalisé)",
+    "argv": ["burpsuite"],
+    "category": "Web",
+    "description": "Proxy et audit web"
+  },
+  {
+    "name": "Terminal de travail",
+    "argv": ["bash"],
+    "category": "Terminal",
+    "terminal": true
+  }
+]

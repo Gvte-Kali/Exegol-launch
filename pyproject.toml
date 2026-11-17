@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "Exegol-launch"
+version = "0.1.0"
+description = "Launcher graphique exécuté dans Exegol"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+launch = "exegol_launch.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["exegol_launch*"]
