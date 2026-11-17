@@ -1,3 +1,5 @@
+"""Point d’entrée CLI ; les imports graphiques sont différés pour permettre --list sans affichage."""
+
 import argparse
 import os
 from pathlib import Path
@@ -7,11 +9,13 @@ from .core import discover, state_dir
 
 
 def main():
+    """Traiter les options CLI ; ouvrir la GUI directement ou dans un processus indépendant."""
     parser = argparse.ArgumentParser(description="Exegol-launch — lanceur graphique dans Exegol")
     parser.add_argument("--foreground", action="store_true", help="Garder le launcher au premier plan pour diagnostic")
     parser.add_argument("--list", action="store_true", help="Lister les applications sans GUI")
     parser.add_argument("--version", action="version", version="Exegol-launch 0.1.0")
     args = parser.parse_args()
+    # Mode texte utilisable dans les tests et les conteneurs sans affichage.
     if args.list:
         apps, warnings = discover()
         for app in apps:
@@ -25,6 +29,7 @@ def main():
         import tkinter as tk
     except ImportError:
         parser.exit(1, "Tkinter absent. Dans Exegol : apt update && apt install python3-tk\n")
+    # Ce chemin est aussi utilisé par le processus enfant créé en mode normal.
     if args.foreground:
         from .gui import run
         try:
@@ -39,6 +44,7 @@ def main():
         root.destroy()
     except tk.TclError as exc:
         parser.exit(1, f"Affichage inaccessible : {exc}\n")
+    # Réutiliser cet interpréteur évite de changer de Python après détachement.
     logfile = state_dir() / "launcher.log"
     with logfile.open("ab") as stream:
         subprocess.Popen([sys.executable, "-m", "exegol_launch", "--foreground"], stdin=subprocess.DEVNULL, stdout=stream, stderr=stream, start_new_session=True, close_fds=True)

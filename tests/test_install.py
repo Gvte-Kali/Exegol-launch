@@ -1,3 +1,5 @@
+"""Tests des installateurs dans des dossiers temporaires, sans accès réseau."""
+
 import os
 from pathlib import Path
 import subprocess
@@ -8,7 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class InstallationTests(unittest.TestCase):
+    """Vérifications des scripts avec des chemins temporaires, sans toucher à l’installation réelle."""
     def test_local_install_update_and_collision(self):
+        """Installer deux fois dans un dossier temporaire et protéger une commande non gérée."""
         with tempfile.TemporaryDirectory(prefix='launcher test ') as tmp:
             base = Path(tmp)
             env = dict(os.environ, EXEGOL_LAUNCH_HOME=str(base / 'app'), EXEGOL_LAUNCH_BIN=str(base / 'bin'), EXEGOL_LAUNCH_SOURCE_DIR=str(ROOT))
@@ -23,6 +27,7 @@ class InstallationTests(unittest.TestCase):
             self.assertIn('unrelated', (base / 'bin/launch').read_text())
 
     def test_hook_preserves_existing_script_and_is_idempotent(self):
+        """Enregistrer deux fois le hook, préserver le code existant et conserver les sauvegardes."""
         with tempfile.TemporaryDirectory() as tmp:
             resources = Path(tmp)
             (resources / 'setup').mkdir()

@@ -1,3 +1,4 @@
+# Vérifications de contribution : aucun affichage graphique n’est nécessaire.
 name: Tests
 on: [push, pull_request]
 jobs:
@@ -5,6 +6,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Les installateurs contrôlent la présence de Tkinter, même pour les tests sans GUI.
       - name: Install system Tkinter
         run: sudo apt-get update && sudo apt-get install -y python3-tk
       - name: Test Python and isolated installers

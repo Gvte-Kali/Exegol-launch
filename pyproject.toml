@@ -1,3 +1,4 @@
+# Métadonnées pour les utilisateurs qui préfèrent installer le paquet avec pip.
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
@@ -9,8 +10,10 @@ description = "Launcher graphique exécuté dans Exegol"
 requires-python = ">=3.10"
 dependencies = []
 
+# Génère la commande launch lors d’une installation du paquet Python.
 [project.scripts]
 launch = "exegol_launch.cli:main"
 
+# Distribuer uniquement le code applicatif, sans le dossier tests.
 [tool.setuptools.packages.find]
 include = ["exegol_launch*"]
