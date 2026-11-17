@@ -1,12 +1,12 @@
 [
   {
-    "name": "Burp Suite (personnalisé)",
+    "name": "Burp Suite (custom)",
     "argv": ["burpsuite"],
     "category": "Web",
-    "description": "Proxy et audit web"
+    "description": "Web proxy and testing"
   },
   {
-    "name": "Terminal de travail",
+    "name": "Working terminal",
     "argv": ["bash"],
     "category": "Terminal",
     "terminal": true

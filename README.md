@@ -136,7 +136,7 @@ Search matches application names, categories and descriptions. Results update as
 |---|---|
 | `★` | Favorite status |
 | Application | Application name |
-| Catégorie | Category from the desktop entry or custom configuration |
+| Category | Category from the desktop entry or custom configuration |
 | Mode | GUI application or terminal command |
 
 Categories are displayed as labels; a separate category selector is not currently implemented.
@@ -145,13 +145,13 @@ Categories are displayed as labels; a separate category selector is not currentl
 
 | Control | Action |
 |---|---|
-| `Favoris uniquement` | Show favorite applications only |
-| `Actualiser` | Reload desktop entries and custom commands |
-| `★ Favori` | Toggle the selected application's favorite status |
+| `Favorites only` | Show favorite applications only |
+| `Refresh` | Reload desktop entries and custom commands |
+| `★ Favorite` | Toggle the selected application's favorite status |
 | `Configuration` | Show the custom configuration path and format |
-| `Lancer ↵` | Launch the selected application |
+| `Launch ↵` | Launch the selected application |
 
-The status area displays application counts, warnings or the log path of the last command started. The current interface labels are in French.
+The status area displays application counts, warnings or the log path of the last command started. The interface and built-in messages are in English. Application names, descriptions and categories supplied by installed tools or custom configuration retain their original text.
 
 ---
 
@@ -200,7 +200,7 @@ When set, `XDG_CONFIG_HOME` replaces `~/.config`.
 |---|---|---|
 | `name` | Yes | Display name; also identifies the custom entry |
 | `argv` | Yes | Non-empty list containing the executable and its arguments |
-| `category` | No | Category label; defaults to `Personnel` |
+| `category` | No | Category label; defaults to `Custom` |
 | `description` | No | Additional searchable text |
 | `terminal` | No | Boolean; open the command in a terminal when true |
 | `cwd` | No | Working directory inside the container |

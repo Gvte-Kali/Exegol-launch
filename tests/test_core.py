@@ -1,4 +1,4 @@
-"""Tests du moteur, exécutables avec unittest et uniquement la bibliothèque standard."""
+"""Engine tests using unittest and the Python standard library only."""
 
 import json
 import os
@@ -11,13 +11,13 @@ from exegol_launch.core import Application, discover, expand_exec, launch_app
 
 
 class CoreTests(unittest.TestCase):
-    """Vérifications du moteur sans serveur graphique ni application Exegol requise."""
+    """Engine checks that require neither a graphical server nor Exegol applications."""
     def test_exec_placeholders_and_quoted_arguments(self):
-        """Vérifier les arguments avec espaces et les codes de champ des fichiers desktop."""
+        """Check quoted arguments and desktop-entry field codes."""
         self.assertEqual(expand_exec('tool "hello world" %U %i %c %k %%', 'My App', '/a.desktop', 'icon'), ['tool', 'hello world', '--icon', 'icon', 'My App', '/a.desktop', '%'])
 
     def test_xdg_override_hidden_and_custom_commands(self):
-        """Vérifier la priorité utilisateur, les entrées masquées et les arguments JSON littéraux."""
+        """Check user overrides, hidden entries and literal JSON arguments."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             user, system = root / 'user', root / 'system'
@@ -37,7 +37,7 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(next(a for a in apps if a.name == 'Custom').argv, ['echo', 'a; touch /tmp/never'])
 
     def test_detached_launch_inherits_environment_and_does_not_use_shell(self):
-        """Contrôler les options de Popen : session indépendante, environnement hérité et absence de shell."""
+        """Check Popen options: detached session, inherited environment and no shell."""
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'XDG_STATE_HOME': tmp, 'DISPLAY': ':77'}):
             with patch('exegol_launch.core.subprocess.Popen') as popen:
                 path = launch_app(Application('test', 'Test', ['echo', 'literal; value']))
@@ -49,7 +49,7 @@ class CoreTests(unittest.TestCase):
                 self.assertTrue(path.exists())
 
     def test_real_process_survives_launcher_exit(self):
-        """Vérifier avec un vrai processus que l’enfant poursuit son travail après la sortie du parent."""
+        """Use a real process to verify the child keeps running after its parent exits."""
         with tempfile.TemporaryDirectory() as tmp:
             marker = Path(tmp) / 'done'
             child = f"import time,pathlib; time.sleep(.15); pathlib.Path({str(marker)!r}).write_text('ok')"
