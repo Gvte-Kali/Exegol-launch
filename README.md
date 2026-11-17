@@ -1,27 +1,25 @@
 # ⬡ Exegol-launch
 
-> **Graphical Application Launcher** — Discover applications, find tools and launch them from a single window. Designed to run inside [Exegol](https://github.com/ThePorgs/Exegol).
+> **Native Application Launcher** — Open XFCE Application Finder from an Exegol terminal, return the shell prompt and launch applications on the configured display.
 
-![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square&logo=python)
 ![Platform](https://img.shields.io/badge/Platform-Linux-informational?style=flat-square&logo=linux)
-![GUI](https://img.shields.io/badge/GUI-Tkinter-green?style=flat-square)
+![GUI](https://img.shields.io/badge/GUI-XFCE_Application_Finder-blue?style=flat-square)
+![Shell](https://img.shields.io/badge/Launcher-Bash-green?style=flat-square&logo=gnubash)
 
 ---
 
 ## In a nutshell
 
-Exegol-launch is a GUI tool that lets you:
+Exegol-launch provides a **`launch` command inside Exegol** using the existing XFCE Application Finder:
 
-- **Discover applications** installed inside an Exegol container
-- **Search tools** by name, category or description
-- Keep frequently used applications in **persistent favorites**
-- **Launch applications in one click** while keeping the terminal available
-- Add **custom commands** through a simple JSON configuration
-- Read **per-application logs** and receive warnings when a launched process exits with an error
+- Reuse XFCE's application discovery, search and categories.
+- **Return the terminal prompt** after opening the finder.
+- Inherit the display configured in the container terminal.
+- Start a **separate finder process**, avoiding the existing VNC desktop's D-Bus finder service.
+- Install automatically in future containers through Exegol's **my-resources** setup hook.
+- Optionally create a local **Caido root-mode desktop override**.
 
-Applications run inside the container and inherit the graphical environment of the terminal. With host display sharing already configured, their windows appear on the host desktop.
-
-**No third-party Python dependencies** — Python stdlib + Tkinter only.
+**No custom GUI, Tkinter or third-party Python modules.** The normal launcher is a Bash wrapper. Python 3 is used for host registration and the optional Caido fix.
 
 ---
 
@@ -29,19 +27,11 @@ Applications run inside the container and inherit the graphical environment of t
 
 - [Installation](#installation)
 - [Launch](#launch)
-- [Uninstall](#uninstall)
-- [Interface](#interface)
-  - [Search bar](#search-bar)
-  - [Applications list](#applications-list)
-  - [Controls](#controls)
-- [Application discovery](#application-discovery)
-- [Configuration format](#configuration-format)
+- [Caido and Electron as root](#caido-and-electron-as-root)
 - [Exegol integration](#exegol-integration)
-  - [Auto-install in all future containers](#auto-install-in-all-future-containers)
-  - [Custom resources directory](#custom-resources-directory)
-  - [Graphical session](#graphical-session)
-- [Updates](#updates)
+- [Updates and migration](#updates-and-migration)
 - [Troubleshooting](#troubleshooting)
+- [Uninstall](#uninstall)
 - [Requirements](#requirements)
 - [Contributing](#contributing)
 
@@ -51,17 +41,17 @@ Applications run inside the container and inherit the graphical environment of t
 
 ### One-liner
 
-Run **inside an existing Exegol container, as root**:
+Run **inside the Exegol container**, as root:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Gvte-Kali/Exegol-launch/main/install.sh | bash
 ```
 
-To install automatically in future containers, use the **host-side** command under [Exegol integration](#exegol-integration).
+The installer reuses `xfce4-appfinder` when present. If missing, it installs that package through apt when running as root. It creates `/usr/local/bin/launch` pointing to `/opt/exegol-launch/native/launch.sh`.
+
+Non-root installation uses `${XDG_DATA_HOME:-$HOME/.local/share}/exegol-launch` and `~/.local/bin/launch`; Application Finder must already be installed. Add `~/.local/bin` to `PATH` if needed.
 
 ### Manual
-
-Run inside the container:
 
 ```bash
 git clone https://github.com/Gvte-Kali/Exegol-launch.git
@@ -69,18 +59,7 @@ cd Exegol-launch
 bash install.sh
 ```
 
-The installer uses local sources when available, prefers system Python with Tkinter support and installs missing Python/Tkinter packages through apt when running as root.
-
-| Installation mode | Application directory | Command |
-|---|---|---|
-| Root | `/opt/exegol-launch` | `/usr/local/bin/launch` |
-| Non-root | `~/.local/share/exegol-launch`¹ | `~/.local/bin/launch` |
-
-¹ Uses `$XDG_DATA_HOME/exegol-launch` when configured. Non-root installation requires Python 3.10+ and Tkinter to be present already. Add `~/.local/bin` to `PATH` if necessary.
-
-No pip or virtual environment is required by the installer. Package installation with `pip install .` in a virtual environment is also supported.
-
-Scripts can be downloaded and reviewed before execution.
+The installer detects local sources. Scripts can be reviewed before execution.
 
 ---
 
@@ -90,296 +69,185 @@ Scripts can be downloaded and reviewed before execution.
 launch
 ```
 
-Exegol-launch starts detached from the shell — **the terminal prompt returns immediately**. Closing the launcher leaves its applications running.
+The process is detached using `nohup` and `setsid`, and output goes to a log. **The terminal becomes available again.** A short startup check reports immediate failures.
 
 | Command | Description |
 |---|---|
-| `launch` | Open the graphical launcher |
-| `launch --foreground` | Run the launcher in the foreground for diagnostics |
-| `launch --list` | List detected applications without opening a window |
-| `launch --version` | Display the installed version |
+| `launch` | Open XFCE Application Finder |
+| `launch --foreground` | Keep output in the terminal for diagnostics |
+| `launch --collapsed` | Open XFCE's collapsed command-entry mode |
+| `launch --version` | Show the wrapper version |
+| `launch --fix-caido` | Create a root-local Caido override with `--no-sandbox` |
 
-Applications remain dependent on the container and display server. Stopping either can stop the applications.
+Other arguments are passed to `xfce4-appfinder`, except wrapper-specific options. `--foreground` must appear first to enable foreground mode.
 
----
+The wrapper explicitly supplies **`--disable-server`** so the finder does not reuse the existing desktop's D-Bus instance. This preserves the new process's display environment; applications can still have their own single-instance behavior.
 
-## Uninstall
-
-Inside the container, remove the managed `launch` wrapper and its application directory using the paths listed under [Installation](#installation).
-
-To disable automatic installation in future containers, remove the block between `# BEGIN Exegol-launch` and `# END Exegol-launch` in the host's `my-resources/setup/load_user_setup.sh`.
-
-Unused `.exegol-launch.*` payload directories under `my-resources/setup/` can then be removed once no hook references them. Keep any backups that are still needed.
-
-Python/Tkinter dependencies, custom commands and favorites are left untouched.
+The finder and launched applications remain inside the container. Closing the finder does not normally close launched applications; stopping the container can stop them.
 
 ---
 
-## Interface
+## Caido and Electron as root
 
-The window contains a search bar, an applications list and controls for favorites, configuration and launching.
-
-### Search bar
-
-Search matches application names, categories and descriptions. Results update as text is entered.
-
-| Shortcut | Action |
-|---|---|
-| `Ctrl+F` | Focus the search field |
-| `Enter` | Launch the selected application |
-| Double-click | Launch the selected application |
-| `Escape` | Close the launcher |
-
-### Applications list
-
-| Column | Description |
-|---|---|
-| `★` | Favorite status |
-| Application | Application name |
-| Category | Category from the desktop entry or custom configuration |
-| Mode | GUI application or terminal command |
-
-Categories are displayed as labels; a separate category selector is not currently implemented.
-
-### Controls
-
-| Control | Action |
-|---|---|
-| `Favorites only` | Show favorite applications only |
-| `Refresh` | Reload desktop entries and custom commands |
-| `★ Favorite` | Toggle the selected application's favorite status |
-| `Configuration` | Show the custom configuration path and format |
-| `Launch ↵` | Launch the selected application |
-
-The status area displays application counts, warnings or the log path of the last command started. The interface and built-in messages are in English. Application names, descriptions and categories supplied by installed tools or custom configuration retain their original text.
-
----
-
-## Application discovery
-
-The launcher reads `.desktop` entries from the container's XDG application directories, with user entries taking precedence over system entries.
-
-- Entries marked `Hidden` or `NoDisplay` are excluded.
-- Entries whose required executable is unavailable are excluded.
-- `OnlyShowIn` and `NotShowIn` restrictions are not applied to this menu.
-- Burp Suite, Firefox, Wireshark, ZAP, BloodHound and Ghidra have fallback detection when their commands are available in `PATH`.
-
-Shell aliases and functions are not executable files. Declare them explicitly in the custom configuration when needed.
-
----
-
-## Configuration format
-
-Custom applications are stored in:
+An Electron application can refuse to start with this message:
 
 ```text
-~/.config/exegol-launch/apps.json
+Running as root without --no-sandbox is not supported.
 ```
 
-When set, `XDG_CONFIG_HOME` replaces `~/.config`.
-
-```json
-[
-  {
-    "name": "Burp Suite",
-    "argv": ["burpsuite"],
-    "category": "Web",
-    "description": "Web application testing"
-  },
-  {
-    "name": "Working shell",
-    "argv": ["bash"],
-    "category": "Terminal",
-    "terminal": true,
-    "cwd": "/workspace"
-  }
-]
-```
-
-| Field | Required | Description |
-|---|---|---|
-| `name` | Yes | Display name; also identifies the custom entry |
-| `argv` | Yes | Non-empty list containing the executable and its arguments |
-| `category` | No | Category label; defaults to `Custom` |
-| `description` | No | Additional searchable text |
-| `terminal` | No | Boolean; open the command in a terminal when true |
-| `cwd` | No | Working directory inside the container |
-
-Arguments are passed directly to the process. Shell operators, `~` and `$VARIABLES` are not expanded. Use absolute paths when needed.
-
-For a command that requires a shell, declare it explicitly, for example `["bash", "-lc", "command"]`, with the appropriate shell configuration.
-
-See [apps.example.json](apps.example.json) for another example.
-
-### Terminal commands
-
-CLI tools need a terminal installed **inside the container**. A terminal command prefix can be configured with:
+Changing launchers does not solve that application's startup requirement. For the installed `caido.desktop` entry, run **inside the container as root**:
 
 ```bash
-export EXEGOL_LAUNCH_TERMINAL='xterm -e'
+launch --fix-caido
 ```
 
-Without this setting, the launcher searches for `x-terminal-emulator`, `xterm`, `kitty` and `alacritty`, in that order.
+This creates or updates `~/.local/share/applications/caido.desktop` (or the equivalent under `XDG_DATA_HOME`), preserving the system entry. It adds `--no-sandbox` only once to Caido's main `Exec` command. An existing user override is backed up once before modification.
+
+**This explicitly disables Electron sandboxing for Caido.** It is not applied globally or automatically to other applications. Running the application as a non-root user with working sandbox support is an alternative.
+
+Restart Application Finder after the change. If the installed desktop filename or executable differs from the supported Caido names, the helper stops with an explanation instead of guessing how to modify it.
+
+To undo the change, restore the `.desktop.exegol-launch.bak` file if one exists, or remove the user override to use the system entry again.
 
 ---
 
 ## Exegol integration
 
-Exegol-launch runs inside the container. No launcher component needs to run on the host after installation.
-
 ### Auto-install in all future containers
 
-Run this one-liner **on the host, as the user who runs Exegol, without sudo**:
+Run **on the host, as the user who runs Exegol, without sudo**:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Gvte-Kali/Exegol-launch/main/setup-exegol.sh | bash
 ```
 
-The setup script:
+Resource path selection uses this order:
 
-1. Downloads the application into `~/.exegol/my-resources/setup/`.
-2. Backs up the existing `load_user_setup.sh`.
-3. Adds a managed installation block after its shebang, preserving existing customizations.
+1. Explicit first argument or `EXEGOL_MY_RESOURCES`.
+2. `volumes.my_resources_path` in `~/.exegol/config.yml` (or `EXEGOL_CONFIG_FILE`).
+3. `~/.exegol/my-resources` when no custom path is configured.
 
-Exegol runs this hook on the **first startup of each new container with my-resources enabled**. The project is installed as `/usr/local/bin/launch`.
-
-| Location | Purpose |
-|---|---|
-| Host: `~/.exegol/my-resources/setup/` | Stored application sources and setup hook |
-| Container: `/opt/my-resources/setup/` | Shared resources mounted by Exegol |
-| Container: `/opt/exegol-launch/` | Installed application releases |
-| Container: `/usr/local/bin/launch` | Launcher command |
-
-The hook must run with root privileges. Application sources are already shared, so no GitHub download is needed during container setup. Installing missing Python/Tkinter packages through apt still requires network access.
-
-Existing containers are not modified. A failed launcher installation emits an Exegol-tagged error visible in the host terminal, without interrupting the remaining hook customizations. The overall Exegol “Successfully deployed my-resources” message is not proof that the launcher installed successfully. Registration ensures the hook has owner execute permission because Exegol executes it directly.
-
-Re-running registration replaces only the managed block and prepares a new source payload. Previous payloads and backups are retained. Updates are not automatic.
-
-See Exegol's [official setup hook template](https://github.com/ThePorgs/Exegol-images/blob/main/sources/assets/exegol/skel/load_user_setup.sh).
+A standard generated YAML mapping is supported without PyYAML. Complex YAML requires PyYAML or an explicit resource path; ambiguous configuration fails rather than silently selecting another directory.
 
 ### Custom resources directory
-
-If `volumes.my_resources_path` points to a different host directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Gvte-Kali/Exegol-launch/main/setup-exegol.sh | bash -s -- /path/to/my-resources
 ```
 
-The script does not automatically read Exegol's configuration file. Running it with sudo may select root's resources instead of the intended user's directory.
+The script creates missing directories, validates existing files and prints the selected resource path.
 
-### Graphical session
+### Existing files and repeated installation
 
-The launcher inherits `DISPLAY`, `XAUTHORITY`, `WAYLAND_DISPLAY` and the rest of the terminal environment. It does not configure display sharing or change display permissions.
+| Item | Behavior |
+|---|---|
+| Existing `load_user_setup.sh` | Preserved outside the managed block |
+| Existing Exeflow or other custom setup | Preserved |
+| Duplicate complete Exegol-launch blocks | Collapsed into one block |
+| Malformed block | Registration stops without modifying the hook |
+| Active sources | One `setup/exegol-launch/` directory |
+| Backup | One initial `load_user_setup.sh.exegol-launch.bak` |
+| Concurrent registration | Serialized using a filesystem lock |
+| Incomplete download or invalid script | Existing hook and payload remain available |
+| Old generated Python payload folders | Removed when identified as this project's managed legacy payloads |
 
-Tkinter on Linux generally needs an accessible X11 display, including through XWayland on a Wayland desktop. No specific desktop environment is required.
+Historic backups from older releases are preserved. Arbitrary similarly named user folders are not removed.
 
-If an application already opens on the host desktop when started from the container terminal, launch Exegol-launch from that same terminal environment. A terminal configured for the VNC display will continue to use that display.
+### First startup
+
+Exegol must have **my-resources enabled and mounted at `/opt/my-resources`**. At the first startup of a new container, its hook runs:
+
+```text
+/opt/my-resources/setup/load_user_setup.sh
+  → /opt/my-resources/setup/exegol-launch/install.sh
+  → /usr/local/bin/launch
+```
+
+The hook runs the installer as root. Sources are already shared; installing a missing apt package still needs network access. Installation status uses Exegol's tagged output so failures are visible in the host terminal.
+
+Exegol's overall “Successfully deployed my-resources” message is **not proof** that every user setup command succeeded. Inspect `/var/log/exegol/load_setups.log` or `.log.gz` inside the container if necessary.
+
+Existing containers are not retroactively initialized: use the container installer for them. The setup mechanism is described in Exegol's [official hook template](https://github.com/ThePorgs/Exegol-images/blob/main/sources/assets/exegol/skel/load_user_setup.sh).
 
 ---
 
-## Updates
+## Updates and migration
 
-Re-run the relevant installation command:
+Version **0.2** replaces the project's Python/Tkinter interface with XFCE Application Finder. There is no second application menu to maintain.
 
-- **Existing container:** re-run `install.sh` inside that container.
-- **Future containers:** re-run `setup-exegol.sh` on the host.
+- Re-run `install.sh` inside an existing container to replace the managed `launch` command.
+- Re-run `setup-exegol.sh` on the host to update future-container installation.
+- Unrelated commands named `launch` are not overwritten.
+- Previous managed Python application releases are removed after successful migration. Python/Tkinter system packages are not uninstalled.
+- Old custom JSON and favorite files are retained as user data, but are not used by Application Finder. Use desktop entries and XFCE's own settings instead.
+- The previous `--list` option is not provided by this native wrapper.
 
-The installer stages application files in a new release before activation. A download failure leaves the active release in place. Previous releases and user preferences are retained.
-
-Download operations have connection and overall timeouts with retries. Installer errors identify the failing step. The setup script checks shell syntax before activating a hook, and the installer restores the previous release link if wrapper activation fails.
-
-A command named `launch` that is not marked as managed by Exegol-launch will not be overwritten. Check its origin before removing or renaming it.
-
-### Pin a version
-
-For a reproducible host registration, use the same commit SHA in the script URL and `EXEGOL_LAUNCH_REF`:
+For reproducible registration, use a commit SHA both in the script URL and `EXEGOL_LAUNCH_REF`:
 
 ```bash
 REF='<commit-sha>'; curl -fsSL "https://raw.githubusercontent.com/Gvte-Kali/Exegol-launch/$REF/setup-exegol.sh" | EXEGOL_LAUNCH_REF="$REF" bash
 ```
 
-The same reference mechanism is available for `install.sh`.
+The same mechanism is available for `install.sh`. Updates are explicit, not automatic.
 
 ---
 
 ## Troubleshooting
 
-Configuration entries are validated individually: an invalid command produces an indexed warning without hiding other valid commands. Invalid UTF-8 files, malformed JSON, incorrect boolean fields, unavailable terminals and missing working directories are reported explicitly.
-
-Favorites are written through a unique temporary file and replaced atomically. If saving fails, the in-memory selection remains unchanged. An unreadable or corrupt favorites file produces a warning rather than silently blocking startup.
-
-While the launcher is open, it polls started processes without blocking the interface and reports nonzero exit statuses with their log paths. This detects process failures, not visual readiness; applications that fork or reuse another instance may exit successfully before a window appears. Closing the launcher ends monitoring but does not terminate its applications.
-
-Unexpected GUI callback errors are written to the launcher output and displayed in a dialog. In detached mode, the output goes to `launcher.log`; in foreground mode, it goes to the terminal.
-
-
 | Symptom | What to check |
 |---|---|
-| `launch: command not found` | Installation path and `PATH`; whether the new-container hook ran |
-| Tkinter is missing | Python 3.10+ and `python3-tk` in the container |
-| Display cannot be opened | Container display sharing, `DISPLAY` and graphical authorization |
-| Windows appear in VNC | The display inherited from the terminal running `launch` |
-| An application exits immediately | Its application log and required runtime dependencies |
-| A tool is missing from the list | Its executable, desktop entry or custom JSON configuration |
-| Automatic installation did not run | Correct resources directory, enabled my-resources mount, executable setup hook and `/var/log/exegol/load_setups.log` (or `.log.gz`) |
+| `launch: command not found` | Container installation, `PATH`, setup hook logs; use `rehash` in zsh |
+| Application Finder missing | Re-run the installer or install `xfce4-appfinder` |
+| No window | Use `launch --foreground`; verify the terminal's display access |
+| Finder appears in VNC | Check `DISPLAY` and `WAYLAND_DISPLAY` inherited from that terminal |
+| Application appears in an existing session | The application may independently reuse its own running instance |
+| Caido root error | Use the explicit `launch --fix-caido` workaround or run Caido as non-root |
+| Automatic installation missing | Verify the printed host resources path matches the mounted Exegol volume |
+| Registration refuses a symlink or malformed hook | Review the existing hook rather than overwriting its target |
 
-Logs are written under:
+Finder logs: `${XDG_STATE_HOME:-$HOME/.local/state}/exegol-launch/appfinder.log`.
 
-```text
-~/.local/state/exegol-launch/
-├── launcher.log
-├── favorites.json
-└── <application-id>.log
-```
+The wrapper does not invent display addresses, modify graphical permissions or configure Docker display sharing. Application Finder's interface language follows the installed XFCE translations and process locale.
 
-When set, `XDG_STATE_HOME` replaces `~/.local/state`. Favorites belong to each user's state directory and are not automatically shared across containers.
+---
 
-Use `launch --foreground` to inspect launcher startup errors. A “command started” message confirms process creation, not that an application successfully opened a window. Log files are appended to and can be removed when the relevant applications are stopped.
+## Uninstall
+
+Remove the managed `/usr/local/bin/launch` symlink and `/opt/exegol-launch` inside the container, or the corresponding non-root paths.
+
+On the host, remove the block from `# BEGIN Exegol-launch` through `# END Exegol-launch` in `my-resources/setup/load_user_setup.sh`. Then remove `setup/exegol-launch/` if it is no longer referenced. Keep any backups still needed.
+
+An optional Caido override is user configuration and must be removed or restored separately. XFCE packages are not uninstalled automatically.
 
 ---
 
 ## Requirements
 
-- Linux container running Exegol
-- Python **3.10+**
-- Tkinter (`python3-tk` on Debian-based images)
-- Working graphical access for the container; generally X11 or XWayland for Tkinter
-- Bash and curl for the installation scripts
-- Python 3 and curl on the host for automatic future-container registration
-- Enabled `my-resources` mount at `/opt/my-resources` for automatic installation
+- Exegol container with graphical access to its intended display
+- Bash, `xfce4-appfinder`, `nohup`, `setsid`, `flock` and standard Linux utilities
+- curl for remote container installation
+- Python 3 on the host for registration, and in the container only for the optional Caido helper
+- Writable resources directory and my-resources enabled for future-container integration
 
-Automatic dependency installation supports **apt-based Exegol images**. Other environments require dependencies to be installed manually.
+Automatic package installation supports apt-based containers. Other environments require Application Finder and system utilities to be installed manually.
 
 ---
 
 ## Contributing
 
-Bug reports and improvements are welcome through [issues](https://github.com/Gvte-Kali/Exegol-launch/issues) and pull requests.
+Issues and pull requests are welcome. Include the Exegol image, installed version, display configuration and useful error output when reporting bugs. Remove sensitive data before sharing logs.
 
-For bug reports, include the project version, Exegol image, Python version, display mode and relevant error messages. Remove sensitive information from logs before sharing them.
-
-### Project structure
-
-| File or directory | Purpose |
+| File | Purpose |
 |---|---|
-| `exegol_launch/cli.py` | CLI arguments, display checks and detached startup |
-| `exegol_launch/core.py` | Application discovery, configuration and processes |
-| `exegol_launch/gui.py` | Tkinter interface, search and favorites |
-| `exegol_launch/__main__.py` | Entry point for `python3 -m exegol_launch` |
-| `install.sh` | Container installation and updates |
-| `setup-exegol.sh` | Host registration for future containers |
-| `apps.example.json` | Sample application configuration |
-| `tests/` | Automated development checks |
-| `.github/workflows/tests.yml` | GitHub Actions checks |
-
-### Tests
+| `launch.sh` | Detached native finder wrapper |
+| `install.sh` | Container installation and migration |
+| `setup-exegol.sh` | Host resource detection and idempotent registration |
+| `fix-caido.py` | Optional local Caido desktop override |
+| `tests/test_native.py` | Isolated regression tests |
 
 ```bash
 python3 -m unittest discover -s tests -v
-bash -n install.sh setup-exegol.sh
+bash -n launch.sh install.sh setup-exegol.sh
 ```
 
-The `tests/` directory checks discovery, command arguments, detached processes and isolated installer behavior. It is **not installed in containers** and is not required to run the launcher.
-
-The engine and installer checks do not require a graphical server. Actual graphical integration must also be validated in an Exegol container with a working display.
+Tests use a stand-in finder to verify arguments and inherited display, plus real filesystem registration and installer operations. They do not replace testing with an actual Exegol graphical session.

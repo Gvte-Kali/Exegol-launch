@@ -1,86 +1,168 @@
 #!/usr/bin/env bash
-# Run on the HOST, as the user who runs Exegol (no sudo).
+# Run on the host as the Exegol user. Keep one managed hook block and one payload.
 set -Eeuo pipefail
-# ERR reports the failing step; EXIT still cleans incomplete staging directories.
-trap 'code=$?; printf "Exegol-launch: %s failed at line %s (status %s).\n" "${BASH_SOURCE[0]:-installer}" "$LINENO" "$code" >&2; exit "$code"' ERR
-# Avoid indefinite hangs when GitHub or a proxy is unavailable.
-download() {
-    command -v curl >/dev/null || { echo 'curl is required for remote installation.' >&2; return 1; }
-    curl --fail --silent --show-error --location --connect-timeout 10 --max-time 120 --retry 2 "$@"
-}
-# The first argument supports a custom my_resources_path.
-resources="${1:-${EXEGOL_MY_RESOURCES:-$HOME/.exegol/my-resources}}"
-ref="${EXEGOL_LAUNCH_REF:-main}"
-base="https://raw.githubusercontent.com/Gvte-Kali/Exegol-launch/$ref"
+trap 'code=$?; printf "Exegol-launch registration failed at line %s (status %s).\n" "$LINENO" "$code" >&2; exit "$code"' ERR
 command -v python3 >/dev/null || { echo 'Python 3 is required on the host.' >&2; exit 1; }
-mkdir -p "$resources/setup"
-# Resolve the host path before writing; the hook uses Exegol's container mount path.
-resources="$(cd -- "$resources" && pwd)"
-stage="$(mktemp -d "$resources/setup/.exegol-launch.XXXXXXXX")"
-trap 'rm -rf -- "$stage"' EXIT
-mkdir -p "$stage/exegol_launch"
-# Explicit distribution list: excludes tests and development tools.
-for file in install.sh exegol_launch/__init__.py exegol_launch/__main__.py exegol_launch/core.py exegol_launch/cli.py exegol_launch/gui.py; do
-    if [[ -n "${EXEGOL_LAUNCH_SOURCE_DIR:-}" ]]; then
-        cp -- "$EXEGOL_LAUNCH_SOURCE_DIR/$file" "$stage/$file"
-    else
-        download "$base/$file" -o "$stage/$file"
-    fi
-done
-bash -n "$stage/install.sh"
-python3 -m compileall -q "$stage/exegol_launch"
-# Versioned payload: hook update is atomic, previous payloads remain available.
-payload="$(basename "$stage")"
-python3 - "$resources/setup/load_user_setup.sh" "$payload" <<'PY'
+python3 - "${1:-${EXEGOL_MY_RESOURCES:-}}" <<'PY'
+import fcntl
+import json
+import os
 from pathlib import Path
-import os, re, shutil, sys
-path = Path(sys.argv[1])
-payload = sys.argv[2]
-if path.is_symlink():
-    raise SystemExit('The hook is a symlink: update it manually to preserve its target.')
-# Preserve existing customizations; create a shebang if the hook is missing.
-old = path.read_text() if path.exists() else '#!/bin/bash\n'
-start, end = '# BEGIN Exegol-launch', '# END Exegol-launch'
-if old.count(start) != old.count(end) or old.count(start) > 1:
-    raise SystemExit('Malformed Exegol-launch block: fix the hook before continuing.')
-# Remove only our previous block; leave other tools unchanged.
-body = re.sub(r'(?ms)^# BEGIN Exegol-launch\n.*?^# END Exegol-launch\n?', '', old)
-# Insert before existing code (including a possible exit/return), after its shebang.
-lines = body.splitlines(keepends=True)
-index = 1 if lines and lines[0].startswith('#!') else 0
-block = f'''# BEGIN Exegol-launch
-# Exegol only forwards lines with its tagged logging prefix to the host terminal.
-printf '%s\\n' '[EXEGOL][INFO]Installing Exegol-launch'
-if bash /opt/my-resources/setup/{payload}/install.sh; then
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import urllib.request
+
+
+def resources_path(explicit):
+    """Honor an explicit path first, then Exegol's volumes.my_resources_path."""
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    config = Path(os.environ.get('EXEGOL_CONFIG_FILE', str(Path.home() / '.exegol/config.yml')))
+    if not config.exists():
+        return Path.home() / '.exegol/my-resources'
+    text = config.read_text(encoding='utf-8')
+    try:
+        import yaml
+    except ImportError:
+        # Support the normal generated mapping without requiring PyYAML on the host.
+        # Reject ambiguous YAML instead of silently writing into the wrong directory.
+        in_volumes = False
+        for line in text.splitlines():
+            if re.match(r'^volumes:\s*(?:#.*)?$', line):
+                in_volumes = True
+                continue
+            if line and not line[0].isspace() and not line.startswith('#'):
+                in_volumes = False
+            match = re.match(r'^\s+my_resources_path:\s*(.*?)\s*$', line) if in_volumes else None
+            if not match:
+                continue
+            value = match.group(1)
+            if value.startswith('"'):
+                value, remainder = json.JSONDecoder().raw_decode(value)
+                if remainder.strip() and not remainder.lstrip().startswith('#'):
+                    raise ValueError('Unsupported resource path in config; pass the path explicitly.')
+            elif value.startswith("'"):
+                match = re.fullmatch(r"'((?:[^']|'')*)'\s*(?:#.*)?", value)
+                if not match:
+                    raise ValueError('Unsupported quoted resource path; pass it explicitly.')
+                value = match.group(1).replace("''", "'")
+            else:
+                value = value.split(' #', 1)[0].strip()
+                if not value or value[0] in '&*!{[>|' or value in ('null', '~'):
+                    raise ValueError('Unsupported YAML resource path; pass it explicitly.')
+            return Path(value).expanduser().resolve()
+        if 'my_resources_path' in text:
+            raise ValueError('Cannot parse configured resources path; pass it explicitly.')
+        return Path.home() / '.exegol/my-resources'
+    else:
+        data = yaml.safe_load(text)
+        if not isinstance(data, dict):
+            raise ValueError('Exegol config must be a mapping; pass a resource path explicitly.')
+        volumes = data.get('volumes', {})
+        if not isinstance(volumes, dict):
+            raise ValueError('Invalid volumes configuration.')
+        value = volumes.get('my_resources_path', str(Path.home() / '.exegol/my-resources'))
+        if not isinstance(value, str) or not value:
+            raise ValueError('Configured my_resources_path must be a non-empty string.')
+        return Path(value).expanduser().resolve()
+
+
+def register():
+    resources = resources_path(sys.argv[1])
+    setup = resources / 'setup'
+    setup.mkdir(parents=True, exist_ok=True)
+    print(f'Using my-resources: {resources}', flush=True)
+    # Serialize concurrent registrations, including download and payload activation.
+    with (setup / '.exegol-launch.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        hook = setup / 'load_user_setup.sh'
+        if hook.is_symlink():
+            raise ValueError('Setup hook is a symlink; update its target explicitly.')
+        old = hook.read_text(encoding='utf-8') if hook.exists() else '#!/bin/bash\n'
+        # Collapse complete old managed blocks, even if previous tools duplicated them.
+        start, end = '# BEGIN Exegol-launch', '# END Exegol-launch'
+        pattern = r'(?ms)^# BEGIN Exegol-launch\n.*?^# END Exegol-launch(?:\n|$)'
+        body = re.sub(pattern, '', old)
+        if start in body or end in body:
+            raise ValueError('Malformed managed block. Repair the hook before registration.')
+        if not body.startswith('#!'):
+            body = '#!/bin/bash\n' + body
+        first, separator, rest = body.partition('\n')
+        block = '''# BEGIN Exegol-launch
+printf '%s\\n' '[EXEGOL][INFO]Installing Exegol-launch (XFCE Application Finder)'
+if bash /opt/my-resources/setup/exegol-launch/install.sh; then
     printf '%s\\n' '[EXEGOL][SUCCESS]Exegol-launch installed; command: launch'
 else
-    printf '%s\\n' '[EXEGOL][ERROR]Exegol-launch installation failed. Inspect /var/log/exegol/load_setups.log(.gz) inside the container.' >&2
+    printf '%s\\n' '[EXEGOL][ERROR]Exegol-launch installation failed; inspect /var/log/exegol/load_setups.log(.gz)'
 fi
 # END Exegol-launch
 '''
-if index and not lines[0].endswith('\n'):
-    lines[0] += '\n'
-lines.insert(index, block)
-# Create a separate backup on each registration.
-if path.exists():
-    backup = path.with_name(path.name + '.bak-' + str(__import__('time').time_ns()))
-    shutil.copy2(path, backup)
-    print(f'Backup: {backup}')
-tmp = path.with_name('.load_user_setup-' + str(os.getpid()))
-tmp.write_text(''.join(lines), encoding='utf-8')
-# Exegol executes this file directly, rather than passing it to bash.
-# Preserve existing permissions, but ensure the owner can execute the hook.
-tmp.chmod((path.stat().st_mode & 0o777 | 0o100) if path.exists() else 0o755)
-# Replace the hook in one operation; its referenced payload is already complete.
-# Validate the complete hook, including pre-existing code, before activation.
-import subprocess
+        updated = first + '\n' + block + rest
+        stage = Path(tempfile.mkdtemp(prefix='.launch-stage-', dir=setup))
+        target = setup / 'exegol-launch'
+        previous = setup / '.exegol-launch.previous'
+        temporary_hook = stage / 'hook'
+        activated = False
+        if previous.exists():
+            shutil.rmtree(stage)
+            raise ValueError('Interrupted registration found: inspect .exegol-launch.previous before retrying.')
+        try:
+            source = os.environ.get('EXEGOL_LAUNCH_SOURCE_DIR')
+            ref = os.environ.get('EXEGOL_LAUNCH_REF', 'main')
+            for name in ('install.sh', 'launch.sh', 'fix-caido.py'):
+                if source:
+                    content = (Path(source) / name).read_bytes()
+                else:
+                    url = f'https://raw.githubusercontent.com/Gvte-Kali/Exegol-launch/{ref}/{name}'
+                    with urllib.request.urlopen(url, timeout=30) as response:
+                        content = response.read()
+                (stage / name).write_bytes(content)
+            for name in ('install.sh', 'launch.sh'):
+                subprocess.run(['bash', '-n', str(stage / name)], check=True)
+            compile((stage / 'fix-caido.py').read_text(encoding='utf-8'), 'fix-caido.py', 'exec')
+            temporary_hook.write_text(updated, encoding='utf-8')
+            temporary_hook.chmod((hook.stat().st_mode & 0o777 | 0o100) if hook.exists() else 0o755)
+            subprocess.run(['bash', '-n', str(temporary_hook)], check=True)
+            # Keep only the first pre-registration backup; repeated runs add no backups.
+            backup = setup / 'load_user_setup.sh.exegol-launch.bak'
+            if hook.exists() and updated != old and not backup.exists():
+                shutil.copy2(hook, backup)
+            if target.exists():
+                if not (target / '.managed-by-exegol-launch').is_file():
+                    raise ValueError(f'Refusing to replace an unrelated directory: {target}')
+                target.rename(previous)
+            (stage / '.managed-by-exegol-launch').write_text('Exegol-launch\n')
+            stage.rename(target)
+            activated = True
+            (target / 'hook').replace(hook)
+        except BaseException:
+            if activated:
+                shutil.rmtree(target)
+            if previous.exists():
+                previous.rename(target)
+            raise
+        finally:
+            if stage.exists():
+                shutil.rmtree(stage)
+        if previous.exists():
+            shutil.rmtree(previous)
+        # Retire old generated Python payloads, but never arbitrary matching user folders.
+        for legacy in setup.glob('.exegol-launch.*'):
+            installer = legacy / 'install.sh'
+            if legacy.is_dir() and not legacy.is_symlink() and installer.is_file() and (legacy / 'exegol_launch/core.py').is_file():
+                if '# Exegol-launch installer:' in installer.read_text(encoding='utf-8'):
+                    shutil.rmtree(legacy)
+        print(f'Registered: {hook}')
+        print('One managed block and one source payload. Existing container installations are unchanged.')
+        print('Future containers must mount these resources at /opt/my-resources.')
+
+
 try:
-    subprocess.run(['bash', '-n', str(tmp)], check=True)
-    os.replace(tmp, path)
-finally:
-    tmp.unlink(missing_ok=True)
+    register()
+except (OSError, ValueError, UnicodeError, subprocess.CalledProcessError) as exc:
+    print(f'Exegol-launch registration: {exc}', file=sys.stderr)
+    sys.exit(1)
 PY
-# Do not remove the payload now referenced by the hook.
-trap - EXIT
-printf 'Registered in %s/setup/load_user_setup.sh\n' "$resources"
-printf 'Future containers with my-resources enabled will install launch on first startup.\n'

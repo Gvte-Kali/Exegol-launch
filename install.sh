@@ -1,108 +1,61 @@
 #!/usr/bin/env bash
-# Exegol-launch installer: local checkout or curl .../install.sh | bash
+# Exegol-launch installer: install a native XFCE wrapper, without Tkinter or pip.
 set -Eeuo pipefail
-# ERR reports the failing step; EXIT still cleans incomplete staging directories.
-trap 'code=$?; printf "Exegol-launch: %s failed at line %s (status %s).\n" "${BASH_SOURCE[0]:-installer}" "$LINENO" "$code" >&2; exit "$code"' ERR
-# Avoid indefinite hangs when GitHub or a proxy is unavailable.
-download() {
-    command -v curl >/dev/null || { echo 'curl is required for remote installation.' >&2; return 1; }
-    curl --fail --silent --show-error --location --connect-timeout 10 --max-time 120 --retry 2 "$@"
-}
-# Use the same ref for all remote files; a commit SHA pins the version.
-repo='Gvte-Kali/Exegol-launch'
+trap 'code=$?; printf "Exegol-launch install failed at line %s (status %s).\n" "$LINENO" "$code" >&2; exit "$code"' ERR
 ref="${EXEGOL_LAUNCH_REF:-main}"
-base="https://raw.githubusercontent.com/$repo/$ref"
-# Root installs for all container users; otherwise use personal directories.
-if [[ $EUID -eq 0 ]]; then
-    default_home=/opt/exegol-launch
-    default_bin=/usr/local/bin
-else
-    default_home="${XDG_DATA_HOME:-$HOME/.local/share}/exegol-launch"
-    default_bin="$HOME/.local/bin"
-fi
+base="https://raw.githubusercontent.com/Gvte-Kali/Exegol-launch/$ref"
+if [[ $EUID -eq 0 ]]; then default_home=/opt/exegol-launch; default_bin=/usr/local/bin
+else default_home="${XDG_DATA_HOME:-$HOME/.local/share}/exegol-launch"; default_bin="$HOME/.local/bin"; fi
 install_dir="${EXEGOL_LAUNCH_HOME:-$default_home}"
 bin_dir="${EXEGOL_LAUNCH_BIN:-$default_bin}"
 source_dir="${EXEGOL_LAUNCH_SOURCE_DIR:-}"
-# A local checkout or my-resources payload avoids GitHub downloads.
 if [[ -z "$source_dir" && -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
     candidate="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-    [[ ! -f "$candidate/exegol_launch/core.py" ]] || source_dir="$candidate"
+    [[ ! -f "$candidate/launch.sh" ]] || source_dir="$candidate"
 fi
-# The marker distinguishes our wrapper from another tool with the same command name.
+mkdir -p -- "$install_dir" "$bin_dir"
+install_dir="$(cd -- "$install_dir" && pwd)"
+bin_dir="$(cd -- "$bin_dir" && pwd)"
+command -v flock >/dev/null || { echo 'flock is required (util-linux).' >&2; exit 1; }
+exec 9>"$install_dir/.install.lock"
+flock -x 9
 if [[ -e "$bin_dir/launch" || -L "$bin_dir/launch" ]]; then
     grep -q '^# Managed by Exegol-launch$' "$bin_dir/launch" || {
-        echo "Refusing to overwrite the existing command: $bin_dir/launch" >&2; exit 1;
+        echo "Refusing to overwrite unrelated command: $bin_dir/launch" >&2; exit 1;
     }
 fi
-# Prefer system Python, since pyenv Python may lack the distro's Tkinter.
-python_bin=""
-for candidate in /usr/bin/python3 "$(command -v python3 || true)"; do
-    if [[ -x "$candidate" ]] && "$candidate" -c 'import sys, tkinter; assert sys.version_info >= (3,10)' 2>/dev/null; then
-        python_bin="$candidate"; break
-    fi
-done
-# Install only missing dependencies and keep apt failures visible.
-if [[ -z "$python_bin" ]]; then
+if ! command -v xfce4-appfinder >/dev/null; then
     if [[ $EUID -ne 0 ]] || ! command -v apt-get >/dev/null; then
-        echo 'Python 3.10+ and Tkinter are required. In Exegol: apt update && apt install python3 python3-tk' >&2
-        exit 1
+        echo 'Install xfce4-appfinder manually, then retry.' >&2; exit 1
     fi
     apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get install -y python3 python3-tk
-    python_bin=/usr/bin/python3
-    "$python_bin" -c 'import sys, tkinter; assert sys.version_info >= (3,10)'
+    DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4-appfinder
 fi
-mkdir -p "$install_dir/releases" "$bin_dir"
-# Stage all files before activating a release; a failed download keeps the old version.
-stage="$(mktemp -d "$install_dir/releases/release.XXXXXXXX")"
-# While stage is set, exiting removes the incomplete release.
-cleanup() { [[ -z "${stage:-}" ]] || rm -rf -- "$stage"; }
-trap cleanup EXIT
-mkdir -p "$stage/exegol_launch"
-for file in __init__.py __main__.py core.py cli.py gui.py; do
-    if [[ -n "$source_dir" ]]; then
-        cp -- "$source_dir/exegol_launch/$file" "$stage/exegol_launch/$file"
-    else
-        download "$base/exegol_launch/$file" -o "$stage/exegol_launch/$file"
-    fi
+command -v setsid >/dev/null || { echo 'setsid is required (util-linux).' >&2; exit 1; }
+stage="$(mktemp -d "$install_dir/.staging.XXXXXXXX")"
+trap 'rm -rf -- "$stage"' EXIT
+for file in launch.sh fix-caido.py; do
+    if [[ -n "$source_dir" ]]; then cp -- "$source_dir/$file" "$stage/$file"
+    else curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 "$base/$file" -o "$stage/$file"; fi
 done
-# Validate syntax before changing the link used by the launch command.
-"$python_bin" -m compileall -q "$stage/exegol_launch"
-"$python_bin" - "$install_dir" "$bin_dir/launch" "$python_bin" "$stage" <<'PY'
-import os, pathlib, shlex, sys
-base, wrapper, python, release = sys.argv[1:]
-base = pathlib.Path(base).resolve()
-# The current symlink provides a stable activation point for all releases.
-current = base / 'current'
-if current.exists() and not current.is_symlink():
-    raise SystemExit(f'Refusing to replace an unmanaged directory: {current}')
-# Prepare the wrapper before changing current. Roll back the link if activation fails.
-link = base / ('.current-' + str(os.getpid()))
-p = pathlib.Path(wrapper)
-tmp = p.with_name('.launch-' + str(os.getpid()))
-previous = os.readlink(current) if current.is_symlink() else None
-activated = False
-try:
-    # Quote paths so spaces and shell metacharacters remain literal.
-    tmp.write_text('#!/bin/sh\n# Managed by Exegol-launch\nPYTHONPATH=' + shlex.quote(str(current)) + ' exec ' + shlex.quote(python) + ' -m exegol_launch "$@"\n')
-    tmp.chmod(0o755)
-    link.symlink_to(pathlib.Path(release).resolve())
-    os.replace(link, current)
-    activated = True
-    os.replace(tmp, p)
-except BaseException:
-    if activated:
-        if previous is None:
-            current.unlink()
-        else:
-            link.symlink_to(previous)
-            os.replace(link, current)
-    raise
-finally:
-    tmp.unlink(missing_ok=True)
-    link.unlink(missing_ok=True)
-PY
-# The release is active: prevent the EXIT trap from removing it.
-stage=''
-printf 'Exegol-launch installed: %s/launch\nRun: launch\n' "$bin_dir"
-printf 'Add %s to PATH if needed. Previous releases are retained.\n' "$bin_dir"
+bash -n "$stage/launch.sh"
+chmod 755 "$stage/launch.sh"
+# A stable symlink keeps a real command in PATH, without adding shell aliases.
+# Keep the old payload until both the directory and command have been activated.
+if [[ -e "$install_dir/native.previous" ]]; then echo 'Interrupted update found: inspect native.previous before retrying.' >&2; exit 1; fi
+if [[ -e "$install_dir/native" ]]; then mv -- "$install_dir/native" "$install_dir/native.previous"; fi
+if mv -- "$stage" "$install_dir/native" && ln -sfn -- "$install_dir/native/launch.sh" "$bin_dir/.launch-new" && mv -Tf -- "$bin_dir/.launch-new" "$bin_dir/launch"; then
+    rm -rf -- "$install_dir/native.previous"
+else
+    rm -f -- "$bin_dir/.launch-new"
+    rm -rf -- "$install_dir/native"
+    if [[ -d "$install_dir/native.previous" ]]; then mv -- "$install_dir/native.previous" "$install_dir/native"; fi
+    echo 'Activation failed; previous native payload restored.' >&2; exit 1
+fi
+# Remove the previous managed Python implementation when migrating from 0.1.
+if [[ -L "$install_dir/current" && -d "$install_dir/releases" ]]; then
+    rm -f -- "$install_dir/current"
+    rm -rf -- "$install_dir/releases"
+fi
+printf 'Exegol-launch installed: %s/launch\n' "$bin_dir"
+printf 'Uses XFCE Application Finder; no Tkinter required. Run: launch\n'

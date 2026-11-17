@@ -1,4 +1,3 @@
-# Contribution checks: no graphical display is required.
 name: Tests
 on: [push, pull_request]
 jobs:
@@ -6,10 +5,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Installers check for Tkinter even when tests do not open a GUI.
-      - name: Install system Tkinter
-        run: sudo apt-get update && sudo apt-get install -y python3-tk
-      - name: Test Python and isolated installers
-        run: /usr/bin/python3 -m unittest discover -s tests -v
+      - name: Test native wrapper and isolated registration
+        run: python3 -m unittest discover -s tests -v
       - name: Check shell syntax
-        run: bash -n install.sh setup-exegol.sh
+        run: bash -n launch.sh install.sh setup-exegol.sh
