@@ -34,10 +34,13 @@ class InstallationTests(unittest.TestCase):
             hook = resources / 'setup/load_user_setup.sh'
             original = '#!/bin/bash\n# Existing Exeflow setup\necho exeflow\nexit 0\n'
             hook.write_text(original)
+            hook.chmod(0o644)
             env = dict(os.environ, EXEGOL_LAUNCH_SOURCE_DIR=str(ROOT))
             for _ in range(2):
                 subprocess.run(['bash', str(ROOT / 'setup-exegol.sh'), tmp], env=env, check=True, capture_output=True)
             text = hook.read_text()
+            self.assertTrue(hook.stat().st_mode & 0o100)
+            self.assertIn('[EXEGOL][ERROR]', text)
             self.assertEqual(text.count('# BEGIN Exegol-launch'), 1)
             self.assertIn(original.split('\n', 1)[1], text)
             self.assertLess(text.index('# BEGIN Exegol-launch'), text.index('exit 0'))

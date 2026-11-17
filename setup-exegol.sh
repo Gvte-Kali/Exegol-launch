@@ -49,9 +49,12 @@ body = re.sub(r'(?ms)^# BEGIN Exegol-launch\n.*?^# END Exegol-launch\n?', '', ol
 lines = body.splitlines(keepends=True)
 index = 1 if lines and lines[0].startswith('#!') else 0
 block = f'''# BEGIN Exegol-launch
-# Local payload shared by Exegol; apt may need network if Tkinter is absent.
-if ! bash /opt/my-resources/setup/{payload}/install.sh; then
-    printf '%s\\n' '[Exegol-launch] Installation failed; see the container setup logs.' >&2
+# Exegol only forwards lines with its tagged logging prefix to the host terminal.
+printf '%s\\n' '[EXEGOL][INFO]Installing Exegol-launch'
+if bash /opt/my-resources/setup/{payload}/install.sh; then
+    printf '%s\\n' '[EXEGOL][SUCCESS]Exegol-launch installed; command: launch'
+else
+    printf '%s\\n' '[EXEGOL][ERROR]Exegol-launch installation failed. Inspect /var/log/exegol/load_setups.log(.gz) inside the container.' >&2
 fi
 # END Exegol-launch
 '''
@@ -65,7 +68,9 @@ if path.exists():
     print(f'Backup: {backup}')
 tmp = path.with_name('.load_user_setup-' + str(os.getpid()))
 tmp.write_text(''.join(lines), encoding='utf-8')
-tmp.chmod(path.stat().st_mode & 0o777 if path.exists() else 0o755)
+# Exegol executes this file directly, rather than passing it to bash.
+# Preserve existing permissions, but ensure the owner can execute the hook.
+tmp.chmod((path.stat().st_mode & 0o777 | 0o100) if path.exists() else 0o755)
 # Replace the hook in one operation; its referenced payload is already complete.
 # Validate the complete hook, including pre-existing code, before activation.
 import subprocess

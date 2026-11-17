@@ -252,7 +252,7 @@ Exegol runs this hook on the **first startup of each new container with my-resou
 
 The hook must run with root privileges. Application sources are already shared, so no GitHub download is needed during container setup. Installing missing Python/Tkinter packages through apt still requires network access.
 
-Existing containers are not modified. A failed launcher installation prints a warning without interrupting the remaining hook customizations.
+Existing containers are not modified. A failed launcher installation emits an Exegol-tagged error visible in the host terminal, without interrupting the remaining hook customizations. The overall Exegol “Successfully deployed my-resources” message is not proof that the launcher installed successfully. Registration ensures the hook has owner execute permission because Exegol executes it directly.
 
 Re-running registration replaces only the managed block and prepares a new source payload. Previous payloads and backups are retained. Updates are not automatic.
 
@@ -322,7 +322,7 @@ Unexpected GUI callback errors are written to the launcher output and displayed 
 | Windows appear in VNC | The display inherited from the terminal running `launch` |
 | An application exits immediately | Its application log and required runtime dependencies |
 | A tool is missing from the list | Its executable, desktop entry or custom JSON configuration |
-| Automatic installation did not run | Correct resources directory, enabled my-resources mount and setup logs |
+| Automatic installation did not run | Correct resources directory, enabled my-resources mount, executable setup hook and `/var/log/exegol/load_setups.log` (or `.log.gz`) |
 
 Logs are written under:
 
