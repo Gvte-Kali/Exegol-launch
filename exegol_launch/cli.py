@@ -2,13 +2,12 @@
 
 import argparse
 import os
-from pathlib import Path
 import subprocess
 import sys
 from .core import discover, state_dir
 
 
-def main():
+def _main():
     """Handle CLI options and open the GUI directly or in a detached process."""
     parser = argparse.ArgumentParser(description="Exegol-launch — graphical application launcher for Exegol")
     parser.add_argument("--foreground", action="store_true", help="Run the launcher in the foreground for diagnostics")
@@ -47,5 +46,25 @@ def main():
     # Reuse this interpreter to avoid switching Python installations after detaching.
     logfile = state_dir() / "launcher.log"
     with logfile.open("ab") as stream:
-        subprocess.Popen([sys.executable, "-m", "exegol_launch", "--foreground"], stdin=subprocess.DEVNULL, stdout=stream, stderr=stream, start_new_session=True, close_fds=True)
+        child = subprocess.Popen([sys.executable, "-m", "exegol_launch", "--foreground"], stdin=subprocess.DEVNULL, stdout=stream, stderr=stream, start_new_session=True, close_fds=True)
+    # Surface immediate startup failures instead of reporting an unconditional success.
+    try:
+        code = child.wait(timeout=0.3)
+    except subprocess.TimeoutExpired:
+        pass
+    else:
+        if code:
+            parser.exit(1, f"Launcher exited with status {code}. See {logfile} or use --foreground.\n")
+        return
     print(f"Exegol-launch started · log: {logfile}")
+
+
+def main():
+    """Keep expected operational failures readable, with meaningful exit codes."""
+    try:
+        _main()
+    except KeyboardInterrupt:
+        raise SystemExit(130) from None
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(f"Exegol-launch: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None

@@ -1,6 +1,10 @@
 """Tkinter interface; delegate discovery and process launching to the engine."""
 
 import json
+import sys
+import traceback
+import tempfile
+import os
 import tkinter as tk
 from tkinter import ttk, messagebox
 from .core import discover, launch_app, state_dir, config_file
@@ -9,6 +13,12 @@ from .core import discover, launch_app, state_dir, config_file
 def run():
     """Build the window, connect actions and start the Tkinter event loop."""
     root = tk.Tk()
+    def report_callback_error(kind, value, tb):
+        """Log unexpected callback failures and keep the error visible to the user."""
+        traceback.print_exception(kind, value, tb, file=sys.stderr)
+        messagebox.showerror("Unexpected error", f"{value}\nSee launcher.log for details.", parent=root)
+
+    root.report_callback_exception = report_callback_error
     root.title("Exegol-launch")
     root.geometry("900x600")
     root.minsize(650, 420)
@@ -36,11 +46,17 @@ def run():
     only_favorites = tk.BooleanVar()
     # A missing or invalid favorites file must not prevent the menu from opening.
     favorite_path = state_dir() / "favorites.json"
+    favorite_warning = None
     try:
-        saved = json.loads(favorite_path.read_text())
-        favorites = set(saved) if isinstance(saved, list) and all(isinstance(x, str) for x in saved) else set()
-    except (OSError, ValueError, TypeError):
+        saved = json.loads(favorite_path.read_text(encoding="utf-8"))
+        if not isinstance(saved, list) or not all(isinstance(x, str) for x in saved):
+            raise ValueError("favorites.json must contain a list of strings")
+        favorites = set(saved)
+    except FileNotFoundError:
         favorites = set()
+    except (OSError, ValueError, UnicodeError) as exc:
+        favorites = set()
+        favorite_warning = f"Cannot load favorites from {favorite_path}: {exc}"
     ttk.Checkbutton(toolbar, text="Favorites only", variable=only_favorites, command=lambda: refresh()).pack(side="left")
     ttk.Button(toolbar, text="Refresh", command=lambda: reload()).pack(side="right")
     tree_frame = ttk.Frame(frame)
@@ -67,7 +83,9 @@ def run():
 
     def refresh(*_):
         """Rebuild visible rows using the search query and favorites filter."""
-        tree.delete(*tree.get_children())
+        children = tree.get_children()
+        if children:
+            tree.delete(*children)
         visible.clear()
         query = search.get().casefold().strip()
         for app in apps:
@@ -96,28 +114,49 @@ def run():
         return visible.get(selection[0]) if selection else None
 
     def toggle_favorite():
-        """Toggle the selected favorite and save the list by replacing the file."""
+        """Save using a unique temporary file; change in-memory state only on success."""
         app = selected()
-        if app:
-            if app.id in favorites:
-                favorites.remove(app.id)
-            else:
-                favorites.add(app.id)
-            try:
-                # Replacing the whole file reduces the risk of partially written JSON.
-                temp = favorite_path.with_suffix(".tmp")
-                temp.write_text(json.dumps(sorted(favorites)))
-                temp.replace(favorite_path)
-            except OSError as exc:
-                messagebox.showerror("Unable to save", str(exc))
-            refresh()
+        if not app:
+            return
+        updated = favorites ^ {app.id}
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=favorite_path.parent, prefix=".favorites-", delete=False) as stream:
+                temporary = stream.name
+                json.dump(sorted(updated), stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, favorite_path)
+        except OSError as exc:
+            messagebox.showerror("Unable to save", str(exc), parent=root)
+            return
+        finally:
+            if temporary is not None:
+                try:
+                    os.unlink(temporary)
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    print(f"Cannot remove temporary favorites file: {exc}", file=sys.stderr)
+        favorites.clear()
+        favorites.update(updated)
+        refresh()
+
+    def monitor(process, logfile, app):
+        """Poll without blocking Tk; reap exited children and report nonzero exits."""
+        code = process.poll()
+        if code is None:
+            root.after(500, lambda: monitor(process, logfile, app))
+        elif code != 0:
+            status.set(f"{app.name} exited with status {code}. Log: {logfile}")
+            messagebox.showwarning("Application exited", f"{app.name} exited with status {code}.\nLog: {logfile}", parent=root)
 
     def start():
         """Launch the selection and report immediate errors without closing the menu."""
         app = selected()
         if app:
             try:
-                logfile = launch_app(app)
+                logfile = launch_app(app, on_started=lambda process, log: root.after(500, lambda: monitor(process, log, app)))
                 status.set(f"Command started: {app.name} · log: {logfile}")
             except (OSError, ValueError, RuntimeError) as exc:
                 messagebox.showerror("Unable to launch", str(exc))
@@ -130,4 +169,6 @@ def run():
     root.bind("<Escape>", lambda _: root.destroy())
     reload()
     entry.focus_set()
+    if favorite_warning:
+        root.after_idle(lambda: messagebox.showwarning("Favorites unavailable", favorite_warning, parent=root))
     root.mainloop()

@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Exegol-launch installer: local checkout or curl .../install.sh | bash
-set -euo pipefail
+set -Eeuo pipefail
+# ERR reports the failing step; EXIT still cleans incomplete staging directories.
+trap 'code=$?; printf "Exegol-launch: %s failed at line %s (status %s).\n" "${BASH_SOURCE[0]:-installer}" "$LINENO" "$code" >&2; exit "$code"' ERR
+# Avoid indefinite hangs when GitHub or a proxy is unavailable.
+download() {
+    command -v curl >/dev/null || { echo 'curl is required for remote installation.' >&2; return 1; }
+    curl --fail --silent --show-error --location --connect-timeout 10 --max-time 120 --retry 2 "$@"
+}
 # Use the same ref for all remote files; a commit SHA pins the version.
 repo='Gvte-Kali/Exegol-launch'
 ref="${EXEGOL_LAUNCH_REF:-main}"
@@ -56,7 +63,7 @@ for file in __init__.py __main__.py core.py cli.py gui.py; do
     if [[ -n "$source_dir" ]]; then
         cp -- "$source_dir/exegol_launch/$file" "$stage/exegol_launch/$file"
     else
-        curl --fail --silent --show-error --location "$base/exegol_launch/$file" -o "$stage/exegol_launch/$file"
+        download "$base/exegol_launch/$file" -o "$stage/exegol_launch/$file"
     fi
 done
 # Validate syntax before changing the link used by the launch command.
@@ -69,16 +76,31 @@ base = pathlib.Path(base).resolve()
 current = base / 'current'
 if current.exists() and not current.is_symlink():
     raise SystemExit(f'Refusing to replace an unmanaged directory: {current}')
+# Prepare the wrapper before changing current. Roll back the link if activation fails.
 link = base / ('.current-' + str(os.getpid()))
-link.symlink_to(pathlib.Path(release).resolve())
-# Replacing the symlink is atomic on the same filesystem.
-os.replace(link, current)
 p = pathlib.Path(wrapper)
 tmp = p.with_name('.launch-' + str(os.getpid()))
-# shlex.quote protects paths containing spaces or special characters.
-tmp.write_text('#!/bin/sh\n# Managed by Exegol-launch\nPYTHONPATH=' + shlex.quote(str(current)) + ' exec ' + shlex.quote(python) + ' -m exegol_launch "$@"\n')
-tmp.chmod(0o755)
-os.replace(tmp, p)
+previous = os.readlink(current) if current.is_symlink() else None
+activated = False
+try:
+    # Quote paths so spaces and shell metacharacters remain literal.
+    tmp.write_text('#!/bin/sh\n# Managed by Exegol-launch\nPYTHONPATH=' + shlex.quote(str(current)) + ' exec ' + shlex.quote(python) + ' -m exegol_launch "$@"\n')
+    tmp.chmod(0o755)
+    link.symlink_to(pathlib.Path(release).resolve())
+    os.replace(link, current)
+    activated = True
+    os.replace(tmp, p)
+except BaseException:
+    if activated:
+        if previous is None:
+            current.unlink()
+        else:
+            link.symlink_to(previous)
+            os.replace(link, current)
+    raise
+finally:
+    tmp.unlink(missing_ok=True)
+    link.unlink(missing_ok=True)
 PY
 # The release is active: prevent the EXIT trap from removing it.
 stage=''

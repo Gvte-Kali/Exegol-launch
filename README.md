@@ -17,7 +17,7 @@ Exegol-launch is a GUI tool that lets you:
 - Keep frequently used applications in **persistent favorites**
 - **Launch applications in one click** while keeping the terminal available
 - Add **custom commands** through a simple JSON configuration
-- Read **per-application logs** when a tool fails to start
+- Read **per-application logs** and receive warnings when a launched process exits with an error
 
 Applications run inside the container and inherit the graphical environment of the terminal. With host display sharing already configured, their windows appear on the host desktop.
 
@@ -287,6 +287,8 @@ Re-run the relevant installation command:
 
 The installer stages application files in a new release before activation. A download failure leaves the active release in place. Previous releases and user preferences are retained.
 
+Download operations have connection and overall timeouts with retries. Installer errors identify the failing step. The setup script checks shell syntax before activating a hook, and the installer restores the previous release link if wrapper activation fails.
+
 A command named `launch` that is not marked as managed by Exegol-launch will not be overwritten. Check its origin before removing or renaming it.
 
 ### Pin a version
@@ -302,6 +304,15 @@ The same reference mechanism is available for `install.sh`.
 ---
 
 ## Troubleshooting
+
+Configuration entries are validated individually: an invalid command produces an indexed warning without hiding other valid commands. Invalid UTF-8 files, malformed JSON, incorrect boolean fields, unavailable terminals and missing working directories are reported explicitly.
+
+Favorites are written through a unique temporary file and replaced atomically. If saving fails, the in-memory selection remains unchanged. An unreadable or corrupt favorites file produces a warning rather than silently blocking startup.
+
+While the launcher is open, it polls started processes without blocking the interface and reports nonzero exit statuses with their log paths. This detects process failures, not visual readiness; applications that fork or reuse another instance may exit successfully before a window appears. Closing the launcher ends monitoring but does not terminate its applications.
+
+Unexpected GUI callback errors are written to the launcher output and displayed in a dialog. In detached mode, the output goes to `launcher.log`; in foreground mode, it goes to the terminal.
+
 
 | Symptom | What to check |
 |---|---|
@@ -371,4 +382,4 @@ bash -n install.sh setup-exegol.sh
 
 The `tests/` directory checks discovery, command arguments, detached processes and isolated installer behavior. It is **not installed in containers** and is not required to run the launcher.
 
-These checks do not require a graphical server. Actual graphical integration must also be validated in an Exegol container with a working display.
+The engine and installer checks do not require a graphical server. Actual graphical integration must also be validated in an Exegol container with a working display.

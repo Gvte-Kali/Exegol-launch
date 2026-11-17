@@ -1,8 +1,9 @@
 # Version 0.1.0 validation
 
-- Six engine and installer tests pass without a graphical display.
+- Eighteen engine and installer tests pass without a graphical display.
 - Tests cover XDG discovery, desktop arguments, inherited environment and detached child processes.
 - Installation, updates, command collisions, idempotent hook registration and backups are checked in temporary directories.
+- Malformed configuration, unavailable resources, failed updates and invalid hooks are covered by regression tests.
 - GUI appearance and Exegol/host graphical integration require manual validation with a real display.
 
 ## Manual integration checklist

@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Run on the HOST, as the user who runs Exegol (no sudo).
-set -euo pipefail
+set -Eeuo pipefail
+# ERR reports the failing step; EXIT still cleans incomplete staging directories.
+trap 'code=$?; printf "Exegol-launch: %s failed at line %s (status %s).\n" "${BASH_SOURCE[0]:-installer}" "$LINENO" "$code" >&2; exit "$code"' ERR
+# Avoid indefinite hangs when GitHub or a proxy is unavailable.
+download() {
+    command -v curl >/dev/null || { echo 'curl is required for remote installation.' >&2; return 1; }
+    curl --fail --silent --show-error --location --connect-timeout 10 --max-time 120 --retry 2 "$@"
+}
 # The first argument supports a custom my_resources_path.
 resources="${1:-${EXEGOL_MY_RESOURCES:-$HOME/.exegol/my-resources}}"
 ref="${EXEGOL_LAUNCH_REF:-main}"
@@ -17,9 +24,10 @@ for file in install.sh exegol_launch/__init__.py exegol_launch/__main__.py exego
     if [[ -n "${EXEGOL_LAUNCH_SOURCE_DIR:-}" ]]; then
         cp -- "$EXEGOL_LAUNCH_SOURCE_DIR/$file" "$stage/$file"
     else
-        curl --fail --silent --show-error --location "$base/$file" -o "$stage/$file"
+        download "$base/$file" -o "$stage/$file"
     fi
 done
+bash -n "$stage/install.sh"
 python3 -m compileall -q "$stage/exegol_launch"
 # Versioned payload: hook update is atomic, previous payloads remain available.
 payload="$(basename "$stage")"
@@ -56,10 +64,16 @@ if path.exists():
     shutil.copy2(path, backup)
     print(f'Backup: {backup}')
 tmp = path.with_name('.load_user_setup-' + str(os.getpid()))
-tmp.write_text(''.join(lines))
+tmp.write_text(''.join(lines), encoding='utf-8')
 tmp.chmod(path.stat().st_mode & 0o777 if path.exists() else 0o755)
 # Replace the hook in one operation; its referenced payload is already complete.
-os.replace(tmp, path)
+# Validate the complete hook, including pre-existing code, before activation.
+import subprocess
+try:
+    subprocess.run(['bash', '-n', str(tmp)], check=True)
+    os.replace(tmp, path)
+finally:
+    tmp.unlink(missing_ok=True)
 PY
 # Do not remove the payload now referenced by the hook.
 trap - EXIT
